@@ -82,8 +82,6 @@ void goToState(State s, unsigned long dur) {
   
   logTransition(prev, s, "Table Transition");
 }
-
-// Чтение кнопки и генерация событий
 Event readInputs() {
   int reading = digitalRead(PIN_BTN);
   
@@ -119,16 +117,13 @@ Event readInputs() {
 
 
 void h_Null(Event e) {
-  // Игнорирование события
 }
 
 void h_Green_Timer(Event e) {
-  // Переход в желтый
   goToState(S_YELLOW, T_YELLOW);
 }
 
 void h_Yellow_Timer(Event e) {
-  // Проверка флага пешехода
   if (pedRequest) {
     pedRequest = false;
     Serial.println(">>> Pedestrian Active: Extending Red");
@@ -143,27 +138,24 @@ void h_Red_Timer(Event e) {
 }
 
 void h_Warning_Timer(Event e) {
-  // Мигание желтым
   digitalWrite(PIN_YELLOW, !digitalRead(PIN_YELLOW));
-  stateStartMillis = millis(); // Перезапусктаймера для следующего мигания
+  stateStartMillis = millis(); 
 }
 
 void h_Any_WarnOn(Event e) {
   goToState(S_WARNING, T_BLINK);
 }
 
-// --- ИНИЦИАЛИЗАЦИЯ ТАБЛИЦЫ ---
+
 void initTable() {
-  // Заполняем NULL
   for (int s = 0; s < NUM_STATES; s++) {
     for (int e = 0; e < NUM_EVENTS; e++) {
       fsmTable[s][e] = h_Null;
     }
   }
 
-  // Заполняем логикой
+
   fsmTable[S_GREEN][E_TIMER] = h_Green_Timer;
-  // E_PED в зеленом только ставит флаг, перехода нет (обрабатывается в таймере желтого)
   
   fsmTable[S_YELLOW][E_TIMER] = h_Yellow_Timer;
   
@@ -171,13 +163,10 @@ void initTable() {
   
   fsmTable[S_WARNING][E_TIMER] = h_Warning_Timer;
 
-  // Авария доступна из любого состояния
   for (int s = 0; s < NUM_STATES; s++) {
     fsmTable[s][E_WARN_ON] = h_Any_WarnOn;
   }
 }
-
-// --- SETUP И LOOP ---
 
 void setup() {
   pinMode(PIN_RED, OUTPUT);
@@ -195,23 +184,19 @@ void setup() {
 }
 
 void loop() {
-  // 1. Получаем событие от входов
   Event inputEvent = readInputs();
 
-  // 2. Глобальная логика выхода из WARNING (если режим выключен externally)
   if (!warningMode && currentState == S_WARNING) {
     goToState(S_GREEN, T_GREEN);
     return;
   }
 
-  // 3. Если включен режим WARNING, форсируем переход, если еще не там
   if (warningMode && currentState != S_WARNING) {
     Handler h = fsmTable[currentState][E_WARN_ON];
     if (h) h(E_WARN_ON);
     return; 
   }
 
-  // 4. Проверка таймера: если время вышло, создаем событие E_TIMER
   Event currentEvent = inputEvent;
   if (millis() - stateStartMillis >= stateDuration) {
     currentEvent = E_TIMER;
