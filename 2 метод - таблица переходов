@@ -1,0 +1,226 @@
+
+#include <Arduino.h>
+
+const uint8_t PIN_RED = 13;
+const uint8_t PIN_YELLOW = 12;
+const uint8_t PIN_GREEN = 11;
+const uint8_t PIN_BTN = 2;
+
+// Тайминги (мс)
+const unsigned long T_GREEN = 10000;
+const unsigned long T_YELLOW = 3000;
+const unsigned long T_RED_NORMAL = 10000;
+const unsigned long T_RED_PED = 15000;
+const unsigned long T_BLINK = 500;
+const unsigned long DEBOUNCE_DELAY = 50;
+const unsigned long LONG_PRESS_TIME = 2000;
+
+// --- ENUMS ---
+enum State { S_GREEN, S_YELLOW, S_RED, S_WARNING, NUM_STATES };
+enum Event { E_NONE, E_TIMER, E_PED, E_WARN_ON, E_WARN_OFF, NUM_EVENTS };
+
+// --- ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ---
+State currentState = S_GREEN;
+unsigned long stateStartMillis = 0;
+unsigned long stateDuration = 0;
+
+bool pedRequest = false;
+bool warningMode = false;
+
+// Переменные кнопки
+int lastBtnState = HIGH;
+int currBtnState = HIGH;
+unsigned long lastDebounceTime = 0;
+unsigned long pressStartTime = 0;
+
+// Тип указателя на функцию-обработчик
+typedef void (*Handler)(Event);
+
+// Таблица переходов [Состояние][Событие]
+Handler fsmTable[NUM_STATES][NUM_EVENTS];
+
+// --- ПРОТОТИПЫ ОБРАБОТЧИКОВ ---
+void h_Green_Timer(Event e);
+void h_Yellow_Timer(Event e);
+void h_Red_Timer(Event e);
+void h_Warning_Timer(Event e);
+void h_Any_WarnOn(Event e);
+void h_Null(Event e);
+
+// --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+
+void setOutputs(State s) {
+  digitalWrite(PIN_RED, LOW);
+  digitalWrite(PIN_YELLOW, LOW);
+  digitalWrite(PIN_GREEN, LOW);
+
+  if (s == S_GREEN) digitalWrite(PIN_GREEN, HIGH);
+  else if (s == S_YELLOW) digitalWrite(PIN_YELLOW, HIGH);
+  else if (s == S_RED) digitalWrite(PIN_RED, HIGH);
+}
+
+void logTransition(State from, State to, const char* reason) {
+  const char* names[] = {"GREEN", "YELLOW", "RED", "WARNING"};
+  Serial.print(millis());
+  Serial.print(" | ");
+  Serial.print(names[from]);
+  Serial.print(" -> ");
+  Serial.print(names[to]);
+  Serial.print(" | Reason: ");
+  Serial.println(reason);
+}
+
+void goToState(State s, unsigned long dur) {
+  State prev = currentState;
+  currentState = s;
+  stateDuration = dur;
+  stateStartMillis = millis();
+  
+  if (s != S_WARNING) {
+    setOutputs(s);
+  }
+  
+  logTransition(prev, s, "Table Transition");
+}
+
+// Чтение кнопки и генерация событий
+Event readInputs() {
+  int reading = digitalRead(PIN_BTN);
+  
+  if (reading != lastBtnState) {
+    lastDebounceTime = millis();
+  }
+
+  if ((millis() - lastDebounceTime) > DEBOUNCE_DELAY) {
+    if (reading != currBtnState) {
+      currBtnState = reading;
+      
+      if (currBtnState == LOW) { // Нажали
+        pressStartTime = millis();
+      } else { // Отпустили
+        unsigned long duration = millis() - pressStartTime;
+        
+        if (duration >= LONG_PRESS_TIME) {
+          warningMode = !warningMode;
+          Serial.print(">>> MODE TOGGLE: ");
+          Serial.println(warningMode ? "WARNING ON" : "WARNING OFF");
+          return warningMode ? E_WARN_ON : E_WARN_OFF;
+        } else if (duration > 50) { 
+          pedRequest = true;
+          Serial.println(">>> PED REQUEST SET");
+          return E_PED;
+        }
+      }
+    }
+  }
+  lastBtnState = reading;
+  return E_NONE;
+}
+
+
+void h_Null(Event e) {
+  // Игнорирование события
+}
+
+void h_Green_Timer(Event e) {
+  // Переход в желтый
+  goToState(S_YELLOW, T_YELLOW);
+}
+
+void h_Yellow_Timer(Event e) {
+  // Проверка флага пешехода
+  if (pedRequest) {
+    pedRequest = false;
+    Serial.println(">>> Pedestrian Active: Extending Red");
+    goToState(S_RED, T_RED_PED);
+  } else {
+    goToState(S_RED, T_RED_NORMAL);
+  }
+}
+
+void h_Red_Timer(Event e) {
+  goToState(S_GREEN, T_GREEN);
+}
+
+void h_Warning_Timer(Event e) {
+  // Мигание желтым
+  digitalWrite(PIN_YELLOW, !digitalRead(PIN_YELLOW));
+  stateStartMillis = millis(); // Перезапусктаймера для следующего мигания
+}
+
+void h_Any_WarnOn(Event e) {
+  goToState(S_WARNING, T_BLINK);
+}
+
+// --- ИНИЦИАЛИЗАЦИЯ ТАБЛИЦЫ ---
+void initTable() {
+  // Заполняем NULL
+  for (int s = 0; s < NUM_STATES; s++) {
+    for (int e = 0; e < NUM_EVENTS; e++) {
+      fsmTable[s][e] = h_Null;
+    }
+  }
+
+  // Заполняем логикой
+  fsmTable[S_GREEN][E_TIMER] = h_Green_Timer;
+  // E_PED в зеленом только ставит флаг, перехода нет (обрабатывается в таймере желтого)
+  
+  fsmTable[S_YELLOW][E_TIMER] = h_Yellow_Timer;
+  
+  fsmTable[S_RED][E_TIMER] = h_Red_Timer;
+  
+  fsmTable[S_WARNING][E_TIMER] = h_Warning_Timer;
+
+  // Авария доступна из любого состояния
+  for (int s = 0; s < NUM_STATES; s++) {
+    fsmTable[s][E_WARN_ON] = h_Any_WarnOn;
+  }
+}
+
+// --- SETUP И LOOP ---
+
+void setup() {
+  pinMode(PIN_RED, OUTPUT);
+  pinMode(PIN_YELLOW, OUTPUT);
+  pinMode(PIN_GREEN, OUTPUT);
+  pinMode(PIN_BTN, INPUT_PULLUP);
+  
+  Serial.begin(9600);
+  while(!Serial);
+  
+  Serial.println("--- FSM TABLE-DRIVEN METHOD STARTED ---");
+  
+  initTable();
+  goToState(S_GREEN, T_GREEN);
+}
+
+void loop() {
+  // 1. Получаем событие от входов
+  Event inputEvent = readInputs();
+
+  // 2. Глобальная логика выхода из WARNING (если режим выключен externally)
+  if (!warningMode && currentState == S_WARNING) {
+    goToState(S_GREEN, T_GREEN);
+    return;
+  }
+
+  // 3. Если включен режим WARNING, форсируем переход, если еще не там
+  if (warningMode && currentState != S_WARNING) {
+    Handler h = fsmTable[currentState][E_WARN_ON];
+    if (h) h(E_WARN_ON);
+    return; 
+  }
+
+  // 4. Проверка таймера: если время вышло, создаем событие E_TIMER
+  Event currentEvent = inputEvent;
+  if (millis() - stateStartMillis >= stateDuration) {
+    currentEvent = E_TIMER;
+  }
+  
+  if (currentEvent != E_NONE && currentEvent != E_PED) {
+    Handler h = fsmTable[currentState][currentEvent];
+    if (h) {
+      h(currentEvent);
+    }
+  }
+}
