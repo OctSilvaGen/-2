@@ -10,22 +10,20 @@ const uint8_t PIN_BTN = 2;
 const unsigned long T_GREEN = 10000;
 const unsigned long T_YELLOW = 3000;
 const unsigned long T_RED_NORMAL = 10000;
-const unsigned long T_RED_PED = 15000;      // +5 сек для пешехода
-const unsigned long T_BLINK = 500;          // Период мигания
+const unsigned long T_RED_PED = 15000;      
+const unsigned long T_BLINK = 500;          
 const unsigned long DEBOUNCE_DELAY = 50;
-const unsigned long LONG_PRESS_TIME = 2000; // Порог длинного нажатия
+const unsigned long LONG_PRESS_TIME = 2000; 
 
 // --- СОСТОЯНИЯ И СОБЫТИЯ ---
 enum State { S_GREEN, S_YELLOW, S_RED, S_WARNING };
-// События обрабатываются внутри логики через флаги
 
 // --- ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ---
 State currentState = S_GREEN;
 unsigned long stateStartMillis = 0;
 unsigned long stateDuration = 0;
-
-bool pedRequest = false;       // Флаг запроса пешехода
-bool warningMode = false;      // Флаг режима WARNING (Авария/Ночь)
+bool pedRequest = false;      
+bool warningMode = false;      
 
 // Переменные кнопки
 int lastBtnState = HIGH;
@@ -43,7 +41,6 @@ void setOutputs(State s) {
   if (s == S_GREEN) digitalWrite(PIN_GREEN, HIGH);
   else if (s == S_YELLOW) digitalWrite(PIN_YELLOW, HIGH);
   else if (s == S_RED) digitalWrite(PIN_RED, HIGH);
-  // S_WARNING управляется вручную (мигание)
 }
 
 void logTransition(State from, State to, const char* reason) {
@@ -81,7 +78,7 @@ void readInputs() {
     if (reading != currBtnState) {
       currBtnState = reading;
       
-      if (currBtnState == LOW) { // Нажали
+      if (currBtnState == LOW) { 
         pressStartTime = millis();
       } else { // Отпустили
         unsigned long duration = millis() - pressStartTime;
@@ -92,7 +89,6 @@ void readInputs() {
           Serial.print(">>> MODE TOGGLE: ");
           Serial.println(warningMode ? "WARNING ON" : "WARNING OFF");
         } else if (duration > 50) { 
-          // Короткое нажатие: Запрос пешехода
           pedRequest = true;
           Serial.println(">>> PED REQUEST SET");
         }
@@ -110,31 +106,26 @@ void setup() {
   pinMode(PIN_BTN, INPUT_PULLUP);
   
   Serial.begin(9600);
-  while(!Serial); // Ждем порт
-  
+  while(!Serial); 
   Serial.println("--- FSM CLASSICAL METHOD STARTED ---");
   goToState(S_GREEN, T_GREEN);
 }
 
 void loop() {
-  // 1. Читаем входы (обновляем флаги pedRequest, warningMode)
   readInputs();
 
-  // 2. Приоритет: Режим WARNING (Авария/Ночь)
+  // 2. Приоритет: Режим WARNING 
   if (warningMode) {
     if (currentState != S_WARNING) {
       goToState(S_WARNING, T_BLINK);
     } else {
-      // Логика мигания внутри состояния WARNING
       if (millis() - stateStartMillis >= stateDuration) {
         digitalWrite(PIN_YELLOW, !digitalRead(PIN_YELLOW)); // Toggle LED
-        stateStartMillis = millis(); // Сброс таймера мигания
+        stateStartMillis = millis(); 
       }
     }
-    return; // Выход из loop, игнорируем остальную логику пока активен WARNING
+    return; 
   }
-
-  // Если были в WARNING и режимвыключили -> сброс в начало цикла (упрощено по ТЗ)
   if (currentState == S_WARNING && !warningMode) {
     goToState(S_GREEN, T_GREEN);
     return;
@@ -147,8 +138,6 @@ void loop() {
   switch (currentState) {
     case S_GREEN:
       if (timerExpired) {
-        // Переход в желтый всегда происходит по таймеру
-        // Флаг пешехода будет проверен в следующем состоянии (Yellow) или здесь для планирования
         goToState(S_YELLOW, T_YELLOW);
       }
       break;
